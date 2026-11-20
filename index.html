@@ -283,4 +283,174 @@ function parsePartNumber(rawReply) {
     const line = lines[i];
     const idx = line.indexOf("62F187");
     if (idx !== -1) {
-      hexPayload += line
+      hexPayload += line.slice(idx + 6);
+    } else if (i > 0 && line.length > 5) {
+      hexPayload += line.slice(5); // strip 3-char Rx header + 2-char ISO-TP sequence (21, 22...)
+    }
+  }
+  let ascii = "";
+  for (let i = 0; i + 1 < hexPayload.length; i += 2) {
+    const code = parseInt(hexPayload.slice(i, i + 2), 16);
+    if (code >= 0x20 && code <= 0x7e) ascii += String.fromCharCode(code);
+  }
+  return ascii.trim();
+}
+
+async function scanAllModules() {
+  if (isRunning) return;
+  isRunning = true;
+  el("btnScan").disabled = true;
+  el("btnStart").disabled = true;
+
+  try {
+    log("Sweeping 0x700–0x7E7 (~12s)... Keep ignition ON.");
+    await sendRaw("ATAT0");    // Fixed fast timeout
+    await sendRaw("ATST 08");  // ~32ms wait per silent ID
+    await sendRaw("ATAR");
+
+    let foundCount = 0;
+    for (let id = 0x700; id <= 0x7e7; id++) {
+      if (id === 0x7df) continue; // Skip functional broadcast
+      const tx = id.toString(16).toUpperCase().padStart(3, "0");
+      await sendRaw(`ATSH ${tx}`);
+      const ping = await sendRaw("3E00");
+
+      if (ping && !ping.includes("NO DATA") && !ping.includes("ERROR") && !ping.includes("?")) {
+        foundCount++;
+        const firstLine = ping.split(/\r?\n/)[0].trim();
+        const rx = firstLine.slice(0, 3);
+        await sendRaw("ATST 19"); // Allow full multi-frame read
+        const partReply = await sendRaw("22F187");
+        const partNum = parsePartNumber(partReply);
+        log(`FOUND Tx:${tx} -> Rx:${rx} | ${partNum || firstLine}`);
+        await sendRaw("ATST 08");
+      }
+    }
+
+    await sendRaw("ATAT1");
+    await sendRaw("ATST 19");
+    log(`Scan complete. ${foundCount} module(s) responded.`);
+  } catch (err) {
+    log(`Scan error: ${err.message}`);
+  } finally {
+    isRunning = false;
+    el("btnScan").disabled = false;
+    el("btnStart").disabled = false;
+  }
+}
+
+// ============================================================================
+// WIGWAG PATTERN ENGINE
+// ============================================================================
+async function setSide(side, state) {
+  if (side === "left" || side === "both") {
+    el("lampLeft").classList.toggle("on", state);
+    const frame = state ? CONFIG.leftOn : CONFIG.leftOff;
+    const res = await sendRaw(frame.replace(/\s+/g, ""));
+    if (res.includes("7F")) log(`Left NRC: ${res}`);
+  }
+  if (side === "right" || side === "both") {
+    el("lampRight").classList.toggle("on", state);
+    const frame = state ? CONFIG.rightOn : CONFIG.rightOff;
+    const res = await sendRaw(frame.replace(/\s+/g, ""));
+    if (res.includes("7F")) log(`Right NRC: ${res}`);
+  }
+}
+
+async function runBurst(side, signal) {
+  for (let i = 0; i < CONFIG.flashesPerBurst; i++) {
+    const t0 = performance.now();
+    await setSide(side, true);
+    await sleep(Math.max(5, CONFIG.flashOnMs - (performance.now() - t0)), signal);
+
+    const t1 = performance.now();
+    await setSide(side, false);
+    if (i < CONFIG.flashesPerBurst - 1) {
+      await sleep(Math.max(5, CONFIG.flashOffMs - (performance.now() - t1)), signal);
+    }
+  }
+}
+
+async function releaseLights() {
+  el("lampLeft").classList.remove("on");
+  el("lampRight").classList.remove("on");
+  try {
+    await sendRaw(CONFIG.leftRelease.replace(/\s+/g, ""));
+    await sendRaw(CONFIG.rightRelease.replace(/\s+/g, ""));
+    await sendRaw("1001");
+    log("Control returned to ECU (2F ... 00).");
+  } catch (e) {
+    log(`Release warning: ${e.message}`);
+  }
+}
+
+async function startWigwag() {
+  if (isRunning) return;
+  syncConfigFromUI();
+
+  if (CONFIG.leftOn.includes("XX") || CONFIG.rightOn.includes("YY")) {
+    log("WARNING: Run Scan first and replace XX XX / YY YY in CONFIG.");
+  }
+
+  isRunning = true;
+  abortController = new AbortController();
+  const { signal } = abortController;
+
+  el("btnScan").disabled = true;
+  el("btnStart").disabled = true;
+  el("btnStop").disabled = false;
+
+  try {
+    await sendRaw("ATH0");
+    await sendRaw(`ATSH ${CONFIG.txHeader}`);
+    await sendRaw(`ATCRA ${CONFIG.rxHeader}`);
+    const sess = await sendRaw("1003");
+    log(`Session 10 03 -> ${sess}`);
+
+    keepAliveTimer = setInterval(() => {
+      if (isRunning) sendRaw("3E80").catch(() => {});
+    }, CONFIG.testerPresentMs);
+
+    let cycle = 0;
+    const targetCycles = CONFIG.loopCycles;
+    while (targetCycles === 0 || cycle < targetCycles) {
+      cycle++;
+      if (CONFIG.patternMode === "alternate") {
+        await runBurst("left", signal);
+        await sleep(CONFIG.burstBreakMs, signal);
+        await runBurst("right", signal);
+        await sleep(CONFIG.burstBreakMs, signal);
+      } else {
+        await runBurst("both", signal);
+        await sleep(CONFIG.burstBreakMs, signal);
+        await runBurst("both", signal);
+        await sleep(CONFIG.burstBreakMs, signal);
+      }
+    }
+    log(`Completed ${cycle} cycle(s).`);
+  } catch (err) {
+    if (err.name !== "AbortError") log(`Stopped on error: ${err.message}`);
+    else log("Stopped by user.");
+  } finally {
+    clearInterval(keepAliveTimer);
+    keepAliveTimer = null;
+    await releaseLights();
+    await sendRaw("ATH1").catch(() => {});
+    isRunning = false;
+    el("btnScan").disabled = false;
+    el("btnStart").disabled = false;
+    el("btnStop").disabled = true;
+  }
+}
+
+function stopWigwag() {
+  if (abortController) abortController.abort();
+}
+
+el("btnConnect").addEventListener("click", connectBLE);
+el("btnScan").addEventListener("click", scanAllModules);
+el("btnStart").addEventListener("click", startWigwag);
+el("btnStop").addEventListener("click", stopWigwag);
+</script>
+</body>
+</html>
