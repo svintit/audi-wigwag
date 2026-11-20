@@ -45,16 +45,17 @@
     }
     .btn-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
     button {
-      padding: 14px; border-radius: 12px; border: none; font-size: 1rem; font-weight: 700;
+      padding: 13px; border-radius: 12px; border: none; font-size: 0.95rem; font-weight: 700;
       cursor: pointer; transition: opacity 0.15s;
     }
     button:disabled { opacity: 0.4; cursor: not-allowed; }
     #btnConnect { background: #2563eb; color: #fff; grid-column: span 2; }
+    #btnScan { background: var(--amber); color: #1f1400; grid-column: span 2; }
     #btnStart { background: var(--green); color: #062117; }
     #btnStop { background: var(--accent); color: #fff; }
     #log {
       background: #090b0e; border: 1px solid var(--border); border-radius: 10px;
-      padding: 10px; height: 150px; overflow-y: auto; font-family: ui-monospace, SFMono-Regular, monospace;
+      padding: 10px; height: 190px; overflow-y: auto; font-family: ui-monospace, SFMono-Regular, monospace;
       font-size: 0.74rem; line-height: 1.4; color: #cbd5e1; white-space: pre-wrap;
     }
   </style>
@@ -103,26 +104,23 @@
 
     <div class="btn-row">
       <button id="btnConnect">1. Connect BLE OBD-II</button>
+      <button id="btnScan" disabled>2. Scan All Modules (700–7E7)</button>
       <button id="btnStart" disabled>Start Loop</button>
       <button id="btnStop" disabled>Stop & Release</button>
     </div>
   </div>
 
-  <div id="log">Ready. Tap "Connect BLE OBD-II" inside Bluefy.</div>
+  <div id="log">Ready. Close Car Scanner, turn ignition ON, and tap Connect.</div>
 
 <script>
 // ============================================================================
-// DYNAMIC CONFIGURATION VARIABLES (Edit defaults or adjust live in the UI)
+// DYNAMIC CONFIGURATION VARIABLES
 // ============================================================================
 const CONFIG = {
-  // CAN Headers for 2018 Audi A7 C7.5
-  // 09 Central Electrics (J519): Tx = 70E, Rx = 778
   txHeader: "70E",
   rxHeader: "778",
 
-  // UDS Service 2F (InputOutputControlByIdentifier) Hex Frames
-  // Replace XX XX (Left) and YY YY (Right) with your captured channel DIDs.
-  // Format: 2F [DID_HI] [DID_LO] [ControlOption: 03=ShortTermAdj, 00=ReturnControl] [State]
+  // Replace XX XX (Left) and YY YY (Right) once we capture your module DIDs
   leftOn:       "2F XX XX 03 01",
   leftOff:      "2F XX XX 03 00",
   leftRelease:  "2F XX XX 00",
@@ -131,17 +129,15 @@ const CONFIG = {
   rightOff:     "2F YY YY 03 00",
   rightRelease: "2F YY YY 00",
 
-  // Pattern Timing & Loop Defaults
-  flashesPerBurst: 3,    // 3 quick flashes per burst
-  flashOnMs:       65,   // Duration each flash stays ON (ms)
-  flashOffMs:      65,   // Dark gap between flashes inside a 3-flash burst (ms)
-  burstBreakMs:    280,  // Short break after 3 flashes before the next 3 flashes (ms)
-  loopCycles:      5,    // Number of full (Left 3 + Right 3) cycles; 0 = infinite
-  patternMode:     "alternate", // "alternate" (L3 -> break -> R3 -> break) or "sync"
-  testerPresentMs: 1500  // Keep-alive interval for UDS 10 03 Extended Session
+  flashesPerBurst: 3,
+  flashOnMs:       65,
+  flashOffMs:      65,
+  burstBreakMs:    280,
+  loopCycles:      5,
+  patternMode:     "alternate",
+  testerPresentMs: 1500
 };
 
-// Common BLE UART Service UUIDs used by iOS ELM327 dongles (Veepeak, Vgate, LELink, etc.)
 const BLE_SERVICES = [
   "0000fff0-0000-1000-8000-00805f9b34fb",
   "0000ffe0-0000-1000-8000-00805f9b34fb",
@@ -149,9 +145,6 @@ const BLE_SERVICES = [
   "6e400001-b5a3-f393-e0a9-e50e24dcca9e"
 ];
 
-// ============================================================================
-// BLE & ELM327 TRANSPORT LAYER
-// ============================================================================
 let bleDevice = null;
 let writeChar = null;
 let notifyChar = null;
@@ -212,7 +205,7 @@ async function sendRaw(cmd, timeoutMs = 1200) {
     setTimeout(() => {
       if (promptResolver === resolve) {
         promptResolver = null;
-        reject(new Error(`Timeout waiting for prompt on: ${cmd}`));
+        reject(new Error(`Timeout on: ${cmd}`));
       }
     }, timeoutMs);
   });
@@ -236,6 +229,7 @@ async function connectBLE() {
     bleDevice.addEventListener("gattserverdisconnected", () => {
       el("statusBadge").textContent = "Disconnected";
       el("statusBadge").classList.remove("connected");
+      el("btnScan").disabled = true;
       el("btnStart").disabled = true;
       el("btnStop").disabled = true;
       log("BLE disconnected.");
@@ -253,7 +247,7 @@ async function connectBLE() {
     }
 
     if (!writeChar || !notifyChar) {
-      throw new Error("Could not find UART write/notify characteristics.");
+      throw new Error("UART write/notify characteristics not found.");
     }
 
     await notifyChar.startNotifications();
@@ -263,140 +257,30 @@ async function connectBLE() {
     el("statusBadge").classList.add("connected");
     log(`Connected to ${bleDevice.name || "OBD Adapter"}. Initializing CAN...`);
 
-    // Initialize ELM327 for VAG ISO 15765-4 500kbps CAN
     await sendRaw("ATZ", 2000);
     await sendRaw("ATE0");
     await sendRaw("ATL0");
     await sendRaw("ATS0");
-    await sendRaw("ATH0");
+    await sendRaw("ATH1");
     await sendRaw("ATSP6");
-    await sendRaw(`ATSH ${CONFIG.txHeader}`);
-    await sendRaw(`ATCRA ${CONFIG.rxHeader}`);
-    await sendRaw("ATST 19"); // ~100ms CAN timeout for fast looping
+    await sendRaw("ATAR");
 
+    el("btnScan").disabled = false;
     el("btnStart").disabled = false;
-    log(`CAN ready (Tx:${CONFIG.txHeader} Rx:${CONFIG.rxHeader}).`);
+    log("CAN ready. Tap '2. Scan All Modules' to find your A7 headers.");
   } catch (err) {
     log(`Connect error: ${err.message}`);
   }
 }
 
 // ============================================================================
-// WIGWAG PATTERN ENGINE
+// AUTOMATED 11-BIT UDS MODULE & PART-NUMBER SWEEP (0x700 - 0x7E7)
 // ============================================================================
-async function setSide(side, state) {
-  if (side === "left" || side === "both") {
-    el("lampLeft").classList.toggle("on", state);
-    const frame = state ? CONFIG.leftOn : CONFIG.leftOff;
-    const res = await sendRaw(frame.replace(/\s+/g, ""));
-    if (res.startsWith("7F")) log(`Left NRC: ${res}`);
-  }
-  if (side === "right" || side === "both") {
-    el("lampRight").classList.toggle("on", state);
-    const frame = state ? CONFIG.rightOn : CONFIG.rightOff;
-    const res = await sendRaw(frame.replace(/\s+/g, ""));
-    if (res.startsWith("7F")) log(`Right NRC: ${res}`);
-  }
-}
-
-async function runBurst(side, signal) {
-  for (let i = 0; i < CONFIG.flashesPerBurst; i++) {
-    const t0 = performance.now();
-    await setSide(side, true);
-    const onRemaining = Math.max(5, CONFIG.flashOnMs - (performance.now() - t0));
-    await sleep(onRemaining, signal);
-
-    const t1 = performance.now();
-    await setSide(side, false);
-    // Only wait flashOffMs between flashes inside the burst; after the last flash, burstBreakMs runs
-    if (i < CONFIG.flashesPerBurst - 1) {
-      const offRemaining = Math.max(5, CONFIG.flashOffMs - (performance.now() - t1));
-      await sleep(offRemaining, signal);
-    }
-  }
-}
-
-async function releaseLights() {
-  el("lampLeft").classList.remove("on");
-  el("lampRight").classList.remove("on");
-  try {
-    await sendRaw(CONFIG.leftRelease.replace(/\s+/g, ""));
-    await sendRaw(CONFIG.rightRelease.replace(/\s+/g, ""));
-    await sendRaw("1001"); // Return J519 to Default Diagnostic Session
-    log("Control returned to ECU (2F ... 00).");
-  } catch (e) {
-    log(`Release warning: ${e.message}`);
-  }
-}
-
-async function startWigwag() {
-  if (isRunning) return;
-  syncConfigFromUI();
-
-  if (CONFIG.leftOn.includes("XX") || CONFIG.rightOn.includes("YY")) {
-    log("WARNING: Replace XX XX and YY YY in CONFIG with your captured 2F DIDs first.");
-  }
-
-  isRunning = true;
-  abortController = new AbortController();
-  const { signal } = abortController;
-
-  el("btnStart").disabled = true;
-  el("btnStop").disabled = false;
-
-  try {
-    // Enter UDS Extended Diagnostic Session (0x03)
-    const sess = await sendRaw("1003");
-    log(`Session 10 03 -> ${sess}`);
-
-    // Background TesterPresent (3E 80 = suppress positive response)
-    keepAliveTimer = setInterval(() => {
-      if (isRunning) sendRaw("3E80").catch(() => {});
-    }, CONFIG.testerPresentMs);
-
-    let cycle = 0;
-    const targetCycles = CONFIG.loopCycles; // 0 = infinite
-    log(`Running: ${CONFIG.flashesPerBurst} flashes + ${CONFIG.burstBreakMs}ms break (${targetCycles || "∞"} cycles)`);
-
-    while (targetCycles === 0 || cycle < targetCycles) {
-      cycle++;
-      if (CONFIG.patternMode === "alternate") {
-        // 3 quick flashes Left -> short break -> 3 quick flashes Right -> short break
-        await runBurst("left", signal);
-        await sleep(CONFIG.burstBreakMs, signal);
-
-        await runBurst("right", signal);
-        await sleep(CONFIG.burstBreakMs, signal);
-      } else {
-        // 3 quick flashes Both -> short break -> 3 quick flashes Both -> short break
-        await runBurst("both", signal);
-        await sleep(CONFIG.burstBreakMs, signal);
-
-        await runBurst("both", signal);
-        await sleep(CONFIG.burstBreakMs, signal);
-      }
-    }
-    log(`Completed ${cycle} cycle(s).`);
-  } catch (err) {
-    if (err.name !== "AbortError") log(`Stopped on error: ${err.message}`);
-    else log("Stopped by user.");
-  } finally {
-    clearInterval(keepAliveTimer);
-    keepAliveTimer = null;
-    await releaseLights();
-    isRunning = false;
-    el("btnStart").disabled = false;
-    el("btnStop").disabled = true;
-  }
-}
-
-function stopWigwag() {
-  if (abortController) abortController.abort();
-}
-
-el("btnConnect").addEventListener("click", connectBLE);
-el("btnStart").addEventListener("click", startWigwag);
-el("btnStop").addEventListener("click", stopWigwag);
-</script>
-</body>
-</html>
+function parsePartNumber(rawReply) {
+  const lines = rawReply.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+  let hexPayload = "";
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const idx = line.indexOf("62F187");
+    if (idx !== -1) {
+      hexPayload += line
