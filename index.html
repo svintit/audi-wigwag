@@ -3,141 +3,133 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
-  <title>A7 C7.5 Wigwag Controller</title>
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
+  <title>Audi / VAG Wigwag Controller</title>
   <style>
     :root {
-      --bg: #0f1115;
-      --card: #181b22;
-      --border: #2a2f3a;
-      --text: #f3f4f6;
-      --muted: #9ca3af;
-      --accent: #e11d48;
-      --green: #10b981;
-      --amber: #f59e0b;
+      --bg: #0f1115; --card: #181b22; --border: #2a2f3a;
+      --text: #f3f4f6; --muted: #9ca3af; --accent: #e11d48;
+      --green: #10b981; --amber: #f59e0b; --blue: #3b82f6;
     }
-    * { box-sizing: border-box; font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif; }
+    * { box-sizing: border-box; font-family: -apple-system, BlinkMacSystemFont, sans-serif; }
     body {
-      margin: 0; padding: 16px; background: var(--bg); color: var(--text);
-      display: flex; flex-direction: column; gap: 14px; max-width: 480px; margin-inline: auto;
+      margin: 0; padding: 14px; background: var(--bg); color: var(--text);
+      display: flex; flex-direction: column; gap: 11px; max-width: 480px; margin-inline: auto;
     }
-    h1 { font-size: 1.15rem; margin: 0; display: flex; justify-content: space-between; align-items: center; }
-    .badge { font-size: 0.75rem; padding: 3px 8px; border-radius: 999px; background: #262b36; color: var(--muted); }
+    h1 { font-size: 1.08rem; margin: 0; display: flex; justify-content: space-between; align-items: center; gap: 6px; }
+    .badges { display: flex; gap: 5px; align-items: center; }
+    .badge { font-size: 0.7rem; padding: 3px 8px; border-radius: 999px; background: #262b36; color: var(--muted); font-weight: 700; }
     .badge.connected { background: rgba(16, 185, 129, 0.18); color: var(--green); }
+    .badge.ver { background: rgba(59, 130, 246, 0.2); color: #93c5fd; }
+    .badge.err { background: rgba(225, 29, 72, 0.25); color: #fda4af; }
     .card {
-      background: var(--card); border: 1px solid var(--border); border-radius: 14px; padding: 14px;
-      display: flex; flex-direction: column; gap: 12px;
+      background: var(--card); border: 1px solid var(--border); border-radius: 14px; padding: 13px;
+      display: flex; flex-direction: column; gap: 10px;
     }
-    .indicators { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+    .profile-bar {
+      display: flex; justify-content: space-between; align-items: center; gap: 8px;
+      background: #11141b; border: 1px solid var(--border); border-radius: 9px; padding: 8px 10px;
+      font-size: 0.75rem; color: #cbd5e1;
+    }
+    .profile-bar button { padding: 4px 8px; font-size: 0.7rem; border-radius: 6px; background: #2a2f3a; color: #e5e7eb; }
+    .indicators, .grid, .btn-row { display: grid; grid-template-columns: 1fr 1fr; gap: 9px; }
     .lamp {
-      height: 44px; border-radius: 10px; background: #111318; border: 1px solid var(--border);
-      display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 0.85rem;
-      letter-spacing: 0.06em; color: var(--muted); transition: background 0.04s, color 0.04s, box-shadow 0.04s;
+      height: 40px; border-radius: 10px; background: #111318; border: 1px solid var(--border);
+      display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 0.82rem; color: var(--muted);
     }
-    .lamp.on {
-      background: #f8fafc; color: #090d16; border-color: #ffffff;
-      box-shadow: 0 0 18px rgba(255, 255, 255, 0.55);
-    }
-    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
-    label { display: flex; flex-direction: column; gap: 4px; font-size: 0.78rem; color: var(--muted); }
+    .lamp.on { background: #f8fafc; color: #090d16; box-shadow: 0 0 18px rgba(255, 255, 255, 0.55); }
+    label { display: flex; flex-direction: column; gap: 3px; font-size: 0.74rem; color: var(--muted); }
     input, select {
-      width: 100%; padding: 9px 10px; border-radius: 8px; border: 1px solid var(--border);
-      background: #101319; color: var(--text); font-size: 0.95rem; font-weight: 600;
+      width: 100%; padding: 8px 9px; border-radius: 8px; border: 1px solid var(--border);
+      background: #101319; color: var(--text); font-size: 0.9rem; font-weight: 600;
     }
-    .btn-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
-    button {
-      padding: 13px; border-radius: 12px; border: none; font-size: 0.95rem; font-weight: 700;
-      cursor: pointer; transition: opacity 0.15s;
-    }
+    button { padding: 12px; border-radius: 11px; border: none; font-size: 0.92rem; font-weight: 700; cursor: pointer; }
     button:disabled { opacity: 0.4; cursor: not-allowed; }
     #btnConnect { background: #2563eb; color: #fff; grid-column: span 2; }
-    #btnScan { background: var(--amber); color: #1f1400; grid-column: span 2; }
+    #btnScan { background: var(--amber); color: #1f1400; }
+    #btnProbe { background: #8b5cf6; color: #fff; }
     #btnStart { background: var(--green); color: #062117; }
     #btnStop { background: var(--accent); color: #fff; }
+    .did-list { display: flex; flex-direction: column; gap: 6px; max-height: 150px; overflow-y: auto; }
+    .did-item {
+      display: flex; justify-content: space-between; align-items: center; gap: 6px;
+      background: #101319; border: 1px solid var(--border); border-radius: 8px; padding: 6px 8px; font-size: 0.76rem;
+    }
+    .did-btns { display: flex; gap: 4px; }
+    .did-btns button { padding: 5px 7px; font-size: 0.7rem; border-radius: 6px; background: #262b36; color: #fff; }
     #log {
       background: #090b0e; border: 1px solid var(--border); border-radius: 10px;
-      padding: 10px; height: 190px; overflow-y: auto; font-family: ui-monospace, SFMono-Regular, monospace;
-      font-size: 0.74rem; line-height: 1.4; color: #cbd5e1; white-space: pre-wrap;
+      padding: 10px; height: 165px; overflow-y: auto; font-family: ui-monospace, monospace;
+      font-size: 0.72rem; line-height: 1.38; color: #cbd5e1; white-space: pre-wrap;
     }
   </style>
 </head>
 <body>
   <h1>
-    <span>C7.5 A7 Wigwag</span>
-    <span id="statusBadge" class="badge">Disconnected</span>
+    <span>VAG Wigwag</span>
+    <span class="badges">
+      <span id="verBadge" class="badge err">JS Cut Off</span>
+      <span id="statusBadge" class="badge">Disconnected</span>
+    </span>
   </h1>
 
   <div class="card">
+    <div class="profile-bar">
+      <span id="profileSummary">Car: Not scanned yet</span>
+      <button id="btnReset" type="button">Reset</button>
+    </div>
+
     <div class="indicators">
       <div id="lampLeft" class="lamp">LEFT</div>
       <div id="lampRight" class="lamp">RIGHT</div>
     </div>
 
     <div class="grid">
-      <label>
-        Flashes per Burst
-        <input id="flashesPerBurst" type="number" min="1" max="10" value="3" />
-      </label>
-      <label>
-        Loop Cycles (0 = ∞)
-        <input id="loopCycles" type="number" min="0" max="999" value="5" />
-      </label>
-      <label>
-        Flash ON (ms)
-        <input id="flashOnMs" type="number" min="25" max="1000" step="5" value="65" />
-      </label>
-      <label>
-        Flash OFF Gap (ms)
-        <input id="flashOffMs" type="number" min="25" max="1000" step="5" value="65" />
-      </label>
-      <label>
-        Break Between Bursts (ms)
-        <input id="burstBreakMs" type="number" min="50" max="3000" step="10" value="280" />
-      </label>
-      <label>
-        Pattern Mode
+      <label>Flashes / Burst<input id="flashesPerBurst" type="number" min="1" max="10" value="3" /></label>
+      <label>Loop Cycles (0=∞)<input id="loopCycles" type="number" min="0" max="999" value="5" /></label>
+      <label>Flash ON (ms)<input id="flashOnMs" type="number" min="25" max="1000" step="5" value="65" /></label>
+      <label>Flash OFF (ms)<input id="flashOffMs" type="number" min="25" max="1000" step="5" value="65" /></label>
+      <label>Burst Break (ms)<input id="burstBreakMs" type="number" min="50" max="3000" step="10" value="280" /></label>
+      <label>Pattern Mode
         <select id="patternMode">
-          <option value="alternate" selected>Alternate (L×3 → R×3)</option>
-          <option value="sync">Simultaneous (Both×3)</option>
+          <option value="sync" selected>Simultaneous (Both×3)</option>
+          <option value="alternate">Alternate (L×3 → R×3)</option>
         </select>
       </label>
     </div>
 
     <div class="btn-row">
       <button id="btnConnect">1. Connect BLE OBD-II</button>
-      <button id="btnScan" disabled>2. Scan All Modules (700–7E7)</button>
+      <button id="btnScan" disabled>2. Scan Car</button>
+      <button id="btnProbe" disabled>3. Find Lights</button>
       <button id="btnStart" disabled>Start Loop</button>
       <button id="btnStop" disabled>Stop & Release</button>
     </div>
+
+    <div id="didList" class="did-list" style="display:none;"></div>
   </div>
 
   <div id="log">Ready. Close Car Scanner, turn ignition ON, and tap Connect.</div>
 
 <script>
-// ============================================================================
-// DYNAMIC CONFIGURATION VARIABLES
-// ============================================================================
-const CONFIG = {
-  txHeader: "70E",
-  rxHeader: "778",
+const APP_VERSION = "v1.3";
+const STORAGE_KEY = "vag_wigwag_profile_v1";
 
-  // Replace XX XX (Left) and YY YY (Right) once we capture your module DIDs
-  leftOn:       "2F XX XX 03 01",
-  leftOff:      "2F XX XX 03 00",
-  leftRelease:  "2F XX XX 00",
-
-  rightOn:      "2F YY YY 03 01",
-  rightOff:     "2F YY YY 03 00",
-  rightRelease: "2F YY YY 00",
-
-  flashesPerBurst: 3,
-  flashOnMs:       65,
-  flashOffMs:      65,
-  burstBreakMs:    280,
-  loopCycles:      5,
-  patternMode:     "alternate",
-  testerPresentMs: 1500
+const DEFAULT_PROFILE = {
+  carLabel: "Not scanned yet",
+  protocol: "ATSP7",     // ATSP7 (29-bit MLB) or ATSP6 (11-bit MQB)
+  cpByte: "17",          // 29-bit priority byte ("17" for MLB1, "18" for MLB-Evo)
+  leftTx: "FC0076",      // Left or shared Central Electrics Tx
+  leftRx: "17FE0076",    // Left or shared Central Electrics Rx
+  rightTx: "FC0076",     // Right module Tx (differs if dual headlight modules 29/39)
+  rightRx: "17FE0076",
+  leftOn: "", leftOff: "", leftRel: "",
+  rightOn: "", rightOff: "", rightRel: "",
+  flashesPerBurst: 3, flashOnMs: 65, flashOffMs: 65, burstBreakMs: 280,
+  loopCycles: 5, patternMode: "sync", testerPresentMs: 1500
 };
 
+let profile = loadProfile();
 const BLE_SERVICES = [
   "0000fff0-0000-1000-8000-00805f9b34fb",
   "0000ffe0-0000-1000-8000-00805f9b34fb",
@@ -145,14 +137,8 @@ const BLE_SERVICES = [
   "6e400001-b5a3-f393-e0a9-e50e24dcca9e"
 ];
 
-let bleDevice = null;
-let writeChar = null;
-let notifyChar = null;
-let rxBuffer = "";
-let promptResolver = null;
-let abortController = null;
-let keepAliveTimer = null;
-let isRunning = false;
+let bleDevice = null, writeChar = null, notifyChar = null;
+let rxBuffer = "", promptResolver = null, abortController = null, keepAliveTimer = null, isRunning = false;
 
 const el = (id) => document.getElementById(id);
 const logBox = el("log");
@@ -163,29 +149,48 @@ function log(msg) {
   logBox.scrollTop = logBox.scrollHeight;
 }
 
-function syncConfigFromUI() {
-  CONFIG.flashesPerBurst = Math.max(1, parseInt(el("flashesPerBurst").value, 10) || 3);
-  CONFIG.loopCycles      = Math.max(0, parseInt(el("loopCycles").value, 10) || 0);
-  CONFIG.flashOnMs       = Math.max(20, parseInt(el("flashOnMs").value, 10) || 65);
-  CONFIG.flashOffMs      = Math.max(20, parseInt(el("flashOffMs").value, 10) || 65);
-  CONFIG.burstBreakMs    = Math.max(40, parseInt(el("burstBreakMs").value, 10) || 280);
-  CONFIG.patternMode     = el("patternMode").value;
+window.onerror = (msg, src, line) => log(`JS Error (L${line}): ${msg}`);
+window.onunhandledrejection = (e) => log(`Promise Error: ${e.reason?.message || e.reason}`);
+
+function loadProfile() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || "null");
+    return saved ? { ...DEFAULT_PROFILE, ...saved } : { ...DEFAULT_PROFILE };
+  } catch { return { ...DEFAULT_PROFILE }; }
+}
+
+function saveProfile() {
+  profile.flashesPerBurst = Math.max(1, parseInt(el("flashesPerBurst").value, 10) || 3);
+  profile.loopCycles = Math.max(0, parseInt(el("loopCycles").value, 10) || 0);
+  profile.flashOnMs = Math.max(20, parseInt(el("flashOnMs").value, 10) || 65);
+  profile.flashOffMs = Math.max(20, parseInt(el("flashOffMs").value, 10) || 65);
+  profile.burstBreakMs = Math.max(40, parseInt(el("burstBreakMs").value, 10) || 280);
+  profile.patternMode = el("patternMode").value;
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(profile));
+  refreshProfileUI();
+}
+
+function refreshProfileUI() {
+  el("flashesPerBurst").value = profile.flashesPerBurst;
+  el("loopCycles").value = profile.loopCycles;
+  el("flashOnMs").value = profile.flashOnMs;
+  el("flashOffMs").value = profile.flashOffMs;
+  el("burstBreakMs").value = profile.burstBreakMs;
+  el("patternMode").value = profile.patternMode;
+  const readyTag = profile.leftOn ? " | Lights Ready" : " | Needs Light Probe";
+  el("profileSummary").textContent = `${profile.carLabel}${readyTag}`;
 }
 
 function sleep(ms, signal) {
   return new Promise((resolve, reject) => {
     if (signal?.aborted) return reject(new DOMException("Aborted", "AbortError"));
     const t = setTimeout(resolve, ms);
-    signal?.addEventListener("abort", () => {
-      clearTimeout(t);
-      reject(new DOMException("Aborted", "AbortError"));
-    }, { once: true });
+    signal?.addEventListener("abort", () => { clearTimeout(t); reject(new DOMException("Aborted", "AbortError")); }, { once: true });
   });
 }
 
 function onBleNotify(event) {
-  const chunk = new TextDecoder().decode(event.target.value);
-  rxBuffer += chunk;
+  rxBuffer += new TextDecoder().decode(event.target.value);
   if (rxBuffer.includes(">") && promptResolver) {
     const fullReply = rxBuffer.replace(/>/g, "").trim();
     rxBuffer = "";
@@ -199,94 +204,71 @@ async function sendRaw(cmd, timeoutMs = 1200) {
   if (!writeChar) throw new Error("Not connected");
   rxBuffer = "";
   const payload = new TextEncoder().encode(cmd + "\r");
-
   const replyPromise = new Promise((resolve, reject) => {
     promptResolver = resolve;
     setTimeout(() => {
-      if (promptResolver === resolve) {
-        promptResolver = null;
-        reject(new Error(`Timeout on: ${cmd}`));
-      }
+      if (promptResolver === resolve) { promptResolver = null; reject(new Error(`Timeout: ${cmd}`)); }
     }, timeoutMs);
   });
-
-  if (writeChar.properties.writeWithoutResponse) {
-    await writeChar.writeValueWithoutResponse(payload);
-  } else {
-    await writeChar.writeValue(payload);
-  }
+  if (writeChar.properties.writeWithoutResponse) await writeChar.writeValueWithoutResponse(payload);
+  else await writeChar.writeValue(payload);
   return replyPromise;
+}
+
+async function targetBus(proto, cp, tx, rx) {
+  await sendRaw(proto);
+  if (proto === "ATSP7" && cp) await sendRaw(`ATCP ${cp}`);
+  await sendRaw(`ATSH ${tx}`);
+  await sendRaw(`ATCRA ${rx}`);
 }
 
 async function connectBLE() {
   try {
-    log("Scanning for BLE OBD-II adapter...");
-    bleDevice = await navigator.bluetooth.requestDevice({
-      acceptAllDevices: true,
-      optionalServices: BLE_SERVICES
-    });
-
+    if (!navigator.bluetooth) { log("Error: Open this URL in Bluefy (not Safari)."); return; }
+    log("Opening BLE device picker...");
+    bleDevice = await navigator.bluetooth.requestDevice({ acceptAllDevices: true, optionalServices: BLE_SERVICES });
     bleDevice.addEventListener("gattserverdisconnected", () => {
       el("statusBadge").textContent = "Disconnected";
       el("statusBadge").classList.remove("connected");
-      el("btnScan").disabled = true;
-      el("btnStart").disabled = true;
-      el("btnStop").disabled = true;
+      ["btnScan", "btnProbe", "btnStart", "btnStop"].forEach(id => el(id).disabled = true);
       log("BLE disconnected.");
     });
 
     const server = await bleDevice.gatt.connect();
     const services = await server.getPrimaryServices();
-
+    writeChar = null; notifyChar = null;
     for (const svc of services) {
-      const chars = await svc.getCharacteristics();
-      for (const c of chars) {
+      for (const c of await svc.getCharacteristics()) {
         if ((c.properties.notify || c.properties.indicate) && !notifyChar) notifyChar = c;
         if ((c.properties.write || c.properties.writeWithoutResponse) && !writeChar) writeChar = c;
       }
     }
-
-    if (!writeChar || !notifyChar) {
-      throw new Error("UART write/notify characteristics not found.");
-    }
+    if (!writeChar || !notifyChar) throw new Error("UART characteristics not found.");
 
     await notifyChar.startNotifications();
     notifyChar.addEventListener("characteristicvaluechanged", onBleNotify);
-
     el("statusBadge").textContent = bleDevice.name || "Connected";
     el("statusBadge").classList.add("connected");
-    log(`Connected to ${bleDevice.name || "OBD Adapter"}. Initializing CAN...`);
 
     await sendRaw("ATZ", 2000);
     await sendRaw("ATE0");
     await sendRaw("ATL0");
     await sendRaw("ATS0");
     await sendRaw("ATH1");
-    await sendRaw("ATSP6");
-    await sendRaw("ATAR");
-
     el("btnScan").disabled = false;
+    el("btnProbe").disabled = false;
     el("btnStart").disabled = false;
-    log("CAN ready. Tap '2. Scan All Modules' to find your A7 headers.");
-  } catch (err) {
-    log(`Connect error: ${err.message}`);
-  }
+    log(`Connected to ${bleDevice.name || "Adapter"}. ${profile.leftOn ? "Saved profile ready!" : "Tap '2. Scan Car'."}`);
+  } catch (err) { log(`Connect error: ${err.message}`); }
 }
 
-// ============================================================================
-// AUTOMATED 11-BIT UDS MODULE & PART-NUMBER SWEEP (0x700 - 0x7E7)
-// ============================================================================
 function parsePartNumber(rawReply) {
   const lines = rawReply.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
   let hexPayload = "";
   for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-    const idx = line.indexOf("62F187");
-    if (idx !== -1) {
-      hexPayload += line.slice(idx + 6);
-    } else if (i > 0 && line.length > 5) {
-      hexPayload += line.slice(5); // strip 3-char Rx header + 2-char ISO-TP sequence (21, 22...)
-    }
+    const idx = lines[i].indexOf("62F187");
+    if (idx !== -1) hexPayload += lines[i].slice(idx + 6);
+    else if (i > 0 && lines[i].length > 8) hexPayload += lines[i].slice(lines[i].startsWith("1") ? 10 : 5);
   }
   let ascii = "";
   for (let i = 0; i + 1 < hexPayload.length; i += 2) {
@@ -296,78 +278,213 @@ function parsePartNumber(rawReply) {
   return ascii.trim();
 }
 
-async function scanAllModules() {
+async function scanCar() {
   if (isRunning) return;
   isRunning = true;
-  el("btnScan").disabled = true;
-  el("btnStart").disabled = true;
+  ["btnScan", "btnProbe", "btnStart"].forEach(id => el(id).disabled = true);
 
   try {
-    log("Sweeping 0x700–0x7E7 (~12s)... Keep ignition ON.");
-    await sendRaw("ATAT0");    // Fixed fast timeout
-    await sendRaw("ATST 08");  // ~32ms wait per silent ID
-    await sendRaw("ATAR");
+    log("Scanning 29-bit MLB & 11-bit MQB lighting modules...");
+    await sendRaw("ATAT0");
+    await sendRaw("ATST 08");
 
-    let foundCount = 0;
-    for (let id = 0x700; id <= 0x7e7; id++) {
-      if (id === 0x7df) continue; // Skip functional broadcast
-      const tx = id.toString(16).toUpperCase().padStart(3, "0");
-      await sendRaw(`ATSH ${tx}`);
+    // 1. Check 29-bit MLB1 body/lighting nodes (17FC00xx -> 17FE00xx)
+    const mlbNodes = ["76", "29", "39", "D6", "D7", "55", "46", "09", "19"];
+    const found = [];
+    for (const node of mlbNodes) {
+      await targetBus("ATSP7", "17", `FC00${node}`, `17FE00${node}`);
       const ping = await sendRaw("3E00");
-
       if (ping && !ping.includes("NO DATA") && !ping.includes("ERROR") && !ping.includes("?")) {
-        foundCount++;
-        const firstLine = ping.split(/\r?\n/)[0].trim();
-        const rx = firstLine.slice(0, 3);
-        await sendRaw("ATST 19"); // Allow full multi-frame read
-        const partReply = await sendRaw("22F187");
-        const partNum = parsePartNumber(partReply);
-        log(`FOUND Tx:${tx} -> Rx:${rx} | ${partNum || firstLine}`);
+        await sendRaw("ATST 19");
+        const pn = parsePartNumber(await sendRaw("22F187"));
         await sendRaw("ATST 08");
+        found.push({ proto: "ATSP7", cp: "17", tx: `FC00${node}`, rx: `17FE00${node}`, node, pn });
+        log(`FOUND MLB node ${node} (${pn || "OK"})`);
+      }
+    }
+
+    // 2. If none found on MLB1, check 11-bit MQB (70E/778, 710/77A) and 29-bit MLB-Evo (18DA09F1)
+    if (found.length === 0) {
+      for (const pair of [["70E", "778"], ["710", "77A"], ["765", "7CF"]]) {
+        await targetBus("ATSP6", "", pair[0], pair[1]);
+        const ping = await sendRaw("3E00");
+        if (ping && !ping.includes("NO DATA") && !ping.includes("ERROR")) {
+          await sendRaw("ATST 19");
+          const pn = parsePartNumber(await sendRaw("22F187"));
+          await sendRaw("ATST 08");
+          found.push({ proto: "ATSP6", cp: "", tx: pair[0], rx: pair[1], node: "09", pn });
+          log(`FOUND 11-bit ${pair[0]}->${pair[1]} (${pn || "OK"})`);
+        }
+      }
+    }
+
+    if (found.length === 0) {
+      await targetBus("ATSP7", "18", "DA09F1", "18DAF109");
+      const ping = await sendRaw("3E00");
+      if (ping && !ping.includes("NO DATA") && !ping.includes("ERROR")) {
+        found.push({ proto: "ATSP7", cp: "18", tx: "DA09F1", rx: "18DAF109", node: "09", pn: "MLB-Evo 09" });
+        log("FOUND 29-bit MLB-Evo 09");
       }
     }
 
     await sendRaw("ATAT1");
     await sendRaw("ATST 19");
-    log(`Scan complete. ${foundCount} module(s) responded.`);
-  } catch (err) {
-    log(`Scan error: ${err.message}`);
-  } finally {
+
+    if (found.length > 0) {
+      const bcm = found.find(m => m.node === "76" || m.node === "09") || found[0];
+      const leftMod = found.find(m => m.node === "29" || m.node === "D6");
+      const rightMod = found.find(m => m.node === "39" || m.node === "D7");
+
+      profile.protocol = bcm.proto;
+      profile.cpByte = bcm.cp;
+      if (leftMod && rightMod) {
+        profile.leftTx = leftMod.tx; profile.leftRx = leftMod.rx;
+        profile.rightTx = rightMod.tx; profile.rightRx = rightMod.rx;
+        profile.carLabel = `Dual LED (${leftMod.node}/${rightMod.node})`;
+      } else {
+        profile.leftTx = bcm.tx; profile.leftRx = bcm.rx;
+        profile.rightTx = bcm.tx; profile.rightRx = bcm.rx;
+        profile.carLabel = `${bcm.pn || bcm.tx} (${bcm.proto})`;
+      }
+      saveProfile();
+      log(`Saved car config! Now tap '3. Find Lights' to detect channels.`);
+    } else {
+      log("No lighting module replied. Ensure ignition is ON (gauges lit).");
+    }
+  } catch (err) { log(`Scan error: ${err.message}`); }
+  finally {
     isRunning = false;
-    el("btnScan").disabled = false;
-    el("btnStart").disabled = false;
+    ["btnScan", "btnProbe", "btnStart"].forEach(id => el(id).disabled = false);
   }
 }
 
-// ============================================================================
-// WIGWAG PATTERN ENGINE
-// ============================================================================
+async function probeLights() {
+  if (isRunning) return;
+  isRunning = true;
+  ["btnScan", "btnProbe", "btnStart"].forEach(id => el(id).disabled = true);
+  const listEl = el("didList");
+  listEl.innerHTML = "";
+  listEl.style.display = "flex";
+
+  try {
+    await sendRaw("ATH0");
+    await targetBus(profile.protocol, profile.cpByte, profile.leftTx, profile.leftRx);
+    const sess = await sendRaw("1003");
+    log(`Probing 2F DIDs on ${profile.leftTx} (Session: ${sess})...`);
+
+    // Probe common VAG BCM1 / LED lighting DIDs (F000-F028 and 3C00-3C20)
+    const ranges = [[0xF000, 0xF028], [0x3C00, 0x3C20]];
+    let hits = 0;
+
+    for (const [start, end] of ranges) {
+      for (let did = start; did <= end; did++) {
+        const hex = did.toString(16).toUpperCase().padStart(4, "0");
+        // Try 6-byte PWM (03 64 00), fallback to 5-byte switch (03 01)
+        let mode = "PWM";
+        let res = await sendRaw(`2F${hex}036400`);
+        if (res.startsWith("7F2F13")) {
+          mode = "SW";
+          res = await sendRaw(`2F${hex}0301`);
+        }
+        await sendRaw(`2F${hex}00`).catch(() => {});
+
+        if (res.startsWith("6F") || res.startsWith("7F2F22") || res.startsWith("7F2F33")) {
+          hits++;
+          const status = res.startsWith("6F") ? "ACTIVE" : (res.endsWith("22") ? "Busy/SwitchOff" : "Locked(27)");
+          log(`DID ${hex} [${mode}] -> ${status} (${res})`);
+          addDidRow(hex, mode, status);
+        }
+      }
+    }
+    await sendRaw("1001").catch(() => {});
+    await sendRaw("ATH1");
+    log(`Probe complete. ${hits} valid channel(s) listed above.`);
+  } catch (err) { log(`Probe error: ${err.message}`); }
+  finally {
+    isRunning = false;
+    ["btnScan", "btnProbe", "btnStart"].forEach(id => el(id).disabled = false);
+  }
+}
+
+function buildCmds(didHex, mode) {
+  return mode === "PWM"
+    ? { on: `2F${didHex}036400`, off: `2F${didHex}030000`, rel: `2F${didHex}00` }
+    : { on: `2F${didHex}0301`, off: `2F${didHex}0300`, rel: `2F${didHex}00` };
+}
+
+function addDidRow(didHex, mode, status) {
+  const row = document.createElement("div");
+  row.className = "did-item";
+  row.innerHTML = `<span><b>${didHex}</b> (${mode} · ${status})</span>`;
+  const btns = document.createElement("div");
+  btns.className = "did-btns";
+
+  const bTest = document.createElement("button");
+  bTest.textContent = "Pulse";
+  bTest.onclick = async () => {
+    const c = buildCmds(didHex, mode);
+    await sendRaw("ATH0");
+    await targetBus(profile.protocol, profile.cpByte, profile.leftTx, profile.leftRx);
+    await sendRaw("1003");
+    await sendRaw(c.on);
+    await sleep(350);
+    await sendRaw(c.rel);
+    await sendRaw("1001");
+    await sendRaw("ATH1");
+    log(`Pulsed ${didHex}`);
+  };
+
+  const bBoth = document.createElement("button");
+  bBoth.textContent = "Save";
+  bBoth.style.background = "#10b981";
+  bBoth.style.color = "#062117";
+  bBoth.onclick = () => {
+    const c = buildCmds(didHex, mode);
+    if (!profile.leftOn || profile.leftOn === profile.rightOn) {
+      profile.leftOn = c.on; profile.leftOff = c.off; profile.leftRel = c.rel;
+      profile.rightOn = c.on; profile.rightOff = c.off; profile.rightRel = c.rel;
+      saveProfile();
+      log(`Saved ${didHex} as primary light channel! Tap Save on a 2nd DID if you want separate L/R.`);
+    } else {
+      profile.rightOn = c.on; profile.rightOff = c.off; profile.rightRel = c.rel;
+      saveProfile();
+      log(`Saved ${didHex} as RIGHT channel (Left kept as ${profile.leftOn.slice(2, 6)}).`);
+    }
+  };
+
+  btns.append(bTest, bBoth);
+  row.appendChild(btns);
+  el("didList").appendChild(row);
+}
+
 async function setSide(side, state) {
+  const sameModule = (profile.leftTx === profile.rightTx);
   if (side === "left" || side === "both") {
     el("lampLeft").classList.toggle("on", state);
-    const frame = state ? CONFIG.leftOn : CONFIG.leftOff;
-    const res = await sendRaw(frame.replace(/\s+/g, ""));
-    if (res.includes("7F")) log(`Left NRC: ${res}`);
+    if (profile.leftOn) {
+      const res = await sendRaw(state ? profile.leftOn : profile.leftOff);
+      if (res.startsWith("7F")) log(`Left NRC: ${res}`);
+    }
   }
   if (side === "right" || side === "both") {
     el("lampRight").classList.toggle("on", state);
-    const frame = state ? CONFIG.rightOn : CONFIG.rightOff;
-    const res = await sendRaw(frame.replace(/\s+/g, ""));
-    if (res.includes("7F")) log(`Right NRC: ${res}`);
+    if (profile.rightOn && (!sameModule || profile.rightOn !== profile.leftOn)) {
+      if (!sameModule) await targetBus(profile.protocol, profile.cpByte, profile.rightTx, profile.rightRx);
+      const res = await sendRaw(state ? profile.rightOn : profile.rightOff);
+      if (res.startsWith("7F")) log(`Right NRC: ${res}`);
+      if (!sameModule) await targetBus(profile.protocol, profile.cpByte, profile.leftTx, profile.leftRx);
+    }
   }
 }
 
 async function runBurst(side, signal) {
-  for (let i = 0; i < CONFIG.flashesPerBurst; i++) {
+  for (let i = 0; i < profile.flashesPerBurst; i++) {
     const t0 = performance.now();
     await setSide(side, true);
-    await sleep(Math.max(5, CONFIG.flashOnMs - (performance.now() - t0)), signal);
-
+    await sleep(Math.max(5, profile.flashOnMs - (performance.now() - t0)), signal);
     const t1 = performance.now();
     await setSide(side, false);
-    if (i < CONFIG.flashesPerBurst - 1) {
-      await sleep(Math.max(5, CONFIG.flashOffMs - (performance.now() - t1)), signal);
-    }
+    if (i < profile.flashesPerBurst - 1) await sleep(Math.max(5, profile.flashOffMs - (performance.now() - t1)), signal);
   }
 }
 
@@ -375,82 +492,73 @@ async function releaseLights() {
   el("lampLeft").classList.remove("on");
   el("lampRight").classList.remove("on");
   try {
-    await sendRaw(CONFIG.leftRelease.replace(/\s+/g, ""));
-    await sendRaw(CONFIG.rightRelease.replace(/\s+/g, ""));
+    if (profile.leftRel) await sendRaw(profile.leftRel);
+    if (profile.rightRel && profile.rightRel !== profile.leftRel) {
+      if (profile.leftTx !== profile.rightTx) await targetBus(profile.protocol, profile.cpByte, profile.rightTx, profile.rightRx);
+      await sendRaw(profile.rightRel);
+    }
     await sendRaw("1001");
-    log("Control returned to ECU (2F ... 00).");
-  } catch (e) {
-    log(`Release warning: ${e.message}`);
-  }
+    log("Control returned to ECU.");
+  } catch (e) { log(`Release warning: ${e.message}`); }
 }
 
 async function startWigwag() {
   if (isRunning) return;
-  syncConfigFromUI();
-
-  if (CONFIG.leftOn.includes("XX") || CONFIG.rightOn.includes("YY")) {
-    log("WARNING: Run Scan first and replace XX XX / YY YY in CONFIG.");
-  }
+  saveProfile();
+  if (!profile.leftOn) { log("Tap '2. Scan Car' then '3. Find Lights' first."); return; }
 
   isRunning = true;
   abortController = new AbortController();
   const { signal } = abortController;
-
-  el("btnScan").disabled = true;
-  el("btnStart").disabled = true;
+  ["btnScan", "btnProbe", "btnStart"].forEach(id => el(id).disabled = true);
   el("btnStop").disabled = false;
 
   try {
     await sendRaw("ATH0");
-    await sendRaw(`ATSH ${CONFIG.txHeader}`);
-    await sendRaw(`ATCRA ${CONFIG.rxHeader}`);
-    const sess = await sendRaw("1003");
-    log(`Session 10 03 -> ${sess}`);
-
-    keepAliveTimer = setInterval(() => {
-      if (isRunning) sendRaw("3E80").catch(() => {});
-    }, CONFIG.testerPresentMs);
+    await targetBus(profile.protocol, profile.cpByte, profile.leftTx, profile.leftRx);
+    log(`Session 10 03 -> ${await sendRaw("1003")}`);
+    keepAliveTimer = setInterval(() => { if (isRunning) sendRaw("3E80").catch(() => {}); }, profile.testerPresentMs);
 
     let cycle = 0;
-    const targetCycles = CONFIG.loopCycles;
-    while (targetCycles === 0 || cycle < targetCycles) {
+    while (profile.loopCycles === 0 || cycle < profile.loopCycles) {
       cycle++;
-      if (CONFIG.patternMode === "alternate") {
-        await runBurst("left", signal);
-        await sleep(CONFIG.burstBreakMs, signal);
-        await runBurst("right", signal);
-        await sleep(CONFIG.burstBreakMs, signal);
+      if (profile.patternMode === "alternate") {
+        await runBurst("left", signal); await sleep(profile.burstBreakMs, signal);
+        await runBurst("right", signal); await sleep(profile.burstBreakMs, signal);
       } else {
-        await runBurst("both", signal);
-        await sleep(CONFIG.burstBreakMs, signal);
-        await runBurst("both", signal);
-        await sleep(CONFIG.burstBreakMs, signal);
+        await runBurst("both", signal); await sleep(profile.burstBreakMs, signal);
+        await runBurst("both", signal); await sleep(profile.burstBreakMs, signal);
       }
     }
     log(`Completed ${cycle} cycle(s).`);
   } catch (err) {
-    if (err.name !== "AbortError") log(`Stopped on error: ${err.message}`);
-    else log("Stopped by user.");
+    log(err.name !== "AbortError" ? `Stopped: ${err.message}` : "Stopped by user.");
   } finally {
-    clearInterval(keepAliveTimer);
-    keepAliveTimer = null;
+    clearInterval(keepAliveTimer); keepAliveTimer = null;
     await releaseLights();
     await sendRaw("ATH1").catch(() => {});
     isRunning = false;
-    el("btnScan").disabled = false;
-    el("btnStart").disabled = false;
+    ["btnScan", "btnProbe", "btnStart"].forEach(id => el(id).disabled = false);
     el("btnStop").disabled = true;
   }
 }
 
-function stopWigwag() {
-  if (abortController) abortController.abort();
-}
-
+refreshProfileUI();
 el("btnConnect").addEventListener("click", connectBLE);
-el("btnScan").addEventListener("click", scanAllModules);
+el("btnScan").addEventListener("click", scanCar);
+el("btnProbe").addEventListener("click", probeLights);
 el("btnStart").addEventListener("click", startWigwag);
-el("btnStop").addEventListener("click", stopWigwag);
+el("btnStop").addEventListener("click", () => abortController?.abort());
+el("btnReset").addEventListener("click", () => {
+  localStorage.removeItem(STORAGE_KEY);
+  profile = loadProfile();
+  refreshProfileUI();
+  el("didList").style.display = "none";
+  log("Saved device profile cleared.");
+});
+
+el("verBadge").textContent = APP_VERSION;
+el("verBadge").className = "badge ver";
 </script>
 </body>
 </html>
