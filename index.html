@@ -1,0 +1,402 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
+  <title>A7 C7.5 Wigwag Controller</title>
+  <style>
+    :root {
+      --bg: #0f1115;
+      --card: #181b22;
+      --border: #2a2f3a;
+      --text: #f3f4f6;
+      --muted: #9ca3af;
+      --accent: #e11d48;
+      --green: #10b981;
+      --amber: #f59e0b;
+    }
+    * { box-sizing: border-box; font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif; }
+    body {
+      margin: 0; padding: 16px; background: var(--bg); color: var(--text);
+      display: flex; flex-direction: column; gap: 14px; max-width: 480px; margin-inline: auto;
+    }
+    h1 { font-size: 1.15rem; margin: 0; display: flex; justify-content: space-between; align-items: center; }
+    .badge { font-size: 0.75rem; padding: 3px 8px; border-radius: 999px; background: #262b36; color: var(--muted); }
+    .badge.connected { background: rgba(16, 185, 129, 0.18); color: var(--green); }
+    .card {
+      background: var(--card); border: 1px solid var(--border); border-radius: 14px; padding: 14px;
+      display: flex; flex-direction: column; gap: 12px;
+    }
+    .indicators { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+    .lamp {
+      height: 44px; border-radius: 10px; background: #111318; border: 1px solid var(--border);
+      display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 0.85rem;
+      letter-spacing: 0.06em; color: var(--muted); transition: background 0.04s, color 0.04s, box-shadow 0.04s;
+    }
+    .lamp.on {
+      background: #f8fafc; color: #090d16; border-color: #ffffff;
+      box-shadow: 0 0 18px rgba(255, 255, 255, 0.55);
+    }
+    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+    label { display: flex; flex-direction: column; gap: 4px; font-size: 0.78rem; color: var(--muted); }
+    input, select {
+      width: 100%; padding: 9px 10px; border-radius: 8px; border: 1px solid var(--border);
+      background: #101319; color: var(--text); font-size: 0.95rem; font-weight: 600;
+    }
+    .btn-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+    button {
+      padding: 14px; border-radius: 12px; border: none; font-size: 1rem; font-weight: 700;
+      cursor: pointer; transition: opacity 0.15s;
+    }
+    button:disabled { opacity: 0.4; cursor: not-allowed; }
+    #btnConnect { background: #2563eb; color: #fff; grid-column: span 2; }
+    #btnStart { background: var(--green); color: #062117; }
+    #btnStop { background: var(--accent); color: #fff; }
+    #log {
+      background: #090b0e; border: 1px solid var(--border); border-radius: 10px;
+      padding: 10px; height: 150px; overflow-y: auto; font-family: ui-monospace, SFMono-Regular, monospace;
+      font-size: 0.74rem; line-height: 1.4; color: #cbd5e1; white-space: pre-wrap;
+    }
+  </style>
+</head>
+<body>
+  <h1>
+    <span>C7.5 A7 Wigwag</span>
+    <span id="statusBadge" class="badge">Disconnected</span>
+  </h1>
+
+  <div class="card">
+    <div class="indicators">
+      <div id="lampLeft" class="lamp">LEFT</div>
+      <div id="lampRight" class="lamp">RIGHT</div>
+    </div>
+
+    <div class="grid">
+      <label>
+        Flashes per Burst
+        <input id="flashesPerBurst" type="number" min="1" max="10" value="3" />
+      </label>
+      <label>
+        Loop Cycles (0 = ∞)
+        <input id="loopCycles" type="number" min="0" max="999" value="5" />
+      </label>
+      <label>
+        Flash ON (ms)
+        <input id="flashOnMs" type="number" min="25" max="1000" step="5" value="65" />
+      </label>
+      <label>
+        Flash OFF Gap (ms)
+        <input id="flashOffMs" type="number" min="25" max="1000" step="5" value="65" />
+      </label>
+      <label>
+        Break Between Bursts (ms)
+        <input id="burstBreakMs" type="number" min="50" max="3000" step="10" value="280" />
+      </label>
+      <label>
+        Pattern Mode
+        <select id="patternMode">
+          <option value="alternate" selected>Alternate (L×3 → R×3)</option>
+          <option value="sync">Simultaneous (Both×3)</option>
+        </select>
+      </label>
+    </div>
+
+    <div class="btn-row">
+      <button id="btnConnect">1. Connect BLE OBD-II</button>
+      <button id="btnStart" disabled>Start Loop</button>
+      <button id="btnStop" disabled>Stop & Release</button>
+    </div>
+  </div>
+
+  <div id="log">Ready. Tap "Connect BLE OBD-II" inside Bluefy.</div>
+
+<script>
+// ============================================================================
+// DYNAMIC CONFIGURATION VARIABLES (Edit defaults or adjust live in the UI)
+// ============================================================================
+const CONFIG = {
+  // CAN Headers for 2018 Audi A7 C7.5
+  // 09 Central Electrics (J519): Tx = 70E, Rx = 778
+  txHeader: "70E",
+  rxHeader: "778",
+
+  // UDS Service 2F (InputOutputControlByIdentifier) Hex Frames
+  // Replace XX XX (Left) and YY YY (Right) with your captured channel DIDs.
+  // Format: 2F [DID_HI] [DID_LO] [ControlOption: 03=ShortTermAdj, 00=ReturnControl] [State]
+  leftOn:       "2F XX XX 03 01",
+  leftOff:      "2F XX XX 03 00",
+  leftRelease:  "2F XX XX 00",
+
+  rightOn:      "2F YY YY 03 01",
+  rightOff:     "2F YY YY 03 00",
+  rightRelease: "2F YY YY 00",
+
+  // Pattern Timing & Loop Defaults
+  flashesPerBurst: 3,    // 3 quick flashes per burst
+  flashOnMs:       65,   // Duration each flash stays ON (ms)
+  flashOffMs:      65,   // Dark gap between flashes inside a 3-flash burst (ms)
+  burstBreakMs:    280,  // Short break after 3 flashes before the next 3 flashes (ms)
+  loopCycles:      5,    // Number of full (Left 3 + Right 3) cycles; 0 = infinite
+  patternMode:     "alternate", // "alternate" (L3 -> break -> R3 -> break) or "sync"
+  testerPresentMs: 1500  // Keep-alive interval for UDS 10 03 Extended Session
+};
+
+// Common BLE UART Service UUIDs used by iOS ELM327 dongles (Veepeak, Vgate, LELink, etc.)
+const BLE_SERVICES = [
+  "0000fff0-0000-1000-8000-00805f9b34fb",
+  "0000ffe0-0000-1000-8000-00805f9b34fb",
+  "000018f0-0000-1000-8000-00805f9b34fb",
+  "6e400001-b5a3-f393-e0a9-e50e24dcca9e"
+];
+
+// ============================================================================
+// BLE & ELM327 TRANSPORT LAYER
+// ============================================================================
+let bleDevice = null;
+let writeChar = null;
+let notifyChar = null;
+let rxBuffer = "";
+let promptResolver = null;
+let abortController = null;
+let keepAliveTimer = null;
+let isRunning = false;
+
+const el = (id) => document.getElementById(id);
+const logBox = el("log");
+
+function log(msg) {
+  const ts = new Date().toISOString().slice(11, 23);
+  logBox.textContent += `\n[${ts}] ${msg}`;
+  logBox.scrollTop = logBox.scrollHeight;
+}
+
+function syncConfigFromUI() {
+  CONFIG.flashesPerBurst = Math.max(1, parseInt(el("flashesPerBurst").value, 10) || 3);
+  CONFIG.loopCycles      = Math.max(0, parseInt(el("loopCycles").value, 10) || 0);
+  CONFIG.flashOnMs       = Math.max(20, parseInt(el("flashOnMs").value, 10) || 65);
+  CONFIG.flashOffMs      = Math.max(20, parseInt(el("flashOffMs").value, 10) || 65);
+  CONFIG.burstBreakMs    = Math.max(40, parseInt(el("burstBreakMs").value, 10) || 280);
+  CONFIG.patternMode     = el("patternMode").value;
+}
+
+function sleep(ms, signal) {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) return reject(new DOMException("Aborted", "AbortError"));
+    const t = setTimeout(resolve, ms);
+    signal?.addEventListener("abort", () => {
+      clearTimeout(t);
+      reject(new DOMException("Aborted", "AbortError"));
+    }, { once: true });
+  });
+}
+
+function onBleNotify(event) {
+  const chunk = new TextDecoder().decode(event.target.value);
+  rxBuffer += chunk;
+  if (rxBuffer.includes(">") && promptResolver) {
+    const fullReply = rxBuffer.replace(/>/g, "").trim();
+    rxBuffer = "";
+    const resolve = promptResolver;
+    promptResolver = null;
+    resolve(fullReply);
+  }
+}
+
+async function sendRaw(cmd, timeoutMs = 1200) {
+  if (!writeChar) throw new Error("Not connected");
+  rxBuffer = "";
+  const payload = new TextEncoder().encode(cmd + "\r");
+
+  const replyPromise = new Promise((resolve, reject) => {
+    promptResolver = resolve;
+    setTimeout(() => {
+      if (promptResolver === resolve) {
+        promptResolver = null;
+        reject(new Error(`Timeout waiting for prompt on: ${cmd}`));
+      }
+    }, timeoutMs);
+  });
+
+  if (writeChar.properties.writeWithoutResponse) {
+    await writeChar.writeValueWithoutResponse(payload);
+  } else {
+    await writeChar.writeValue(payload);
+  }
+  return replyPromise;
+}
+
+async function connectBLE() {
+  try {
+    log("Scanning for BLE OBD-II adapter...");
+    bleDevice = await navigator.bluetooth.requestDevice({
+      acceptAllDevices: true,
+      optionalServices: BLE_SERVICES
+    });
+
+    bleDevice.addEventListener("gattserverdisconnected", () => {
+      el("statusBadge").textContent = "Disconnected";
+      el("statusBadge").classList.remove("connected");
+      el("btnStart").disabled = true;
+      el("btnStop").disabled = true;
+      log("BLE disconnected.");
+    });
+
+    const server = await bleDevice.gatt.connect();
+    const services = await server.getPrimaryServices();
+
+    for (const svc of services) {
+      const chars = await svc.getCharacteristics();
+      for (const c of chars) {
+        if ((c.properties.notify || c.properties.indicate) && !notifyChar) notifyChar = c;
+        if ((c.properties.write || c.properties.writeWithoutResponse) && !writeChar) writeChar = c;
+      }
+    }
+
+    if (!writeChar || !notifyChar) {
+      throw new Error("Could not find UART write/notify characteristics.");
+    }
+
+    await notifyChar.startNotifications();
+    notifyChar.addEventListener("characteristicvaluechanged", onBleNotify);
+
+    el("statusBadge").textContent = bleDevice.name || "Connected";
+    el("statusBadge").classList.add("connected");
+    log(`Connected to ${bleDevice.name || "OBD Adapter"}. Initializing CAN...`);
+
+    // Initialize ELM327 for VAG ISO 15765-4 500kbps CAN
+    await sendRaw("ATZ", 2000);
+    await sendRaw("ATE0");
+    await sendRaw("ATL0");
+    await sendRaw("ATS0");
+    await sendRaw("ATH0");
+    await sendRaw("ATSP6");
+    await sendRaw(`ATSH ${CONFIG.txHeader}`);
+    await sendRaw(`ATCRA ${CONFIG.rxHeader}`);
+    await sendRaw("ATST 19"); // ~100ms CAN timeout for fast looping
+
+    el("btnStart").disabled = false;
+    log(`CAN ready (Tx:${CONFIG.txHeader} Rx:${CONFIG.rxHeader}).`);
+  } catch (err) {
+    log(`Connect error: ${err.message}`);
+  }
+}
+
+// ============================================================================
+// WIGWAG PATTERN ENGINE
+// ============================================================================
+async function setSide(side, state) {
+  if (side === "left" || side === "both") {
+    el("lampLeft").classList.toggle("on", state);
+    const frame = state ? CONFIG.leftOn : CONFIG.leftOff;
+    const res = await sendRaw(frame.replace(/\s+/g, ""));
+    if (res.startsWith("7F")) log(`Left NRC: ${res}`);
+  }
+  if (side === "right" || side === "both") {
+    el("lampRight").classList.toggle("on", state);
+    const frame = state ? CONFIG.rightOn : CONFIG.rightOff;
+    const res = await sendRaw(frame.replace(/\s+/g, ""));
+    if (res.startsWith("7F")) log(`Right NRC: ${res}`);
+  }
+}
+
+async function runBurst(side, signal) {
+  for (let i = 0; i < CONFIG.flashesPerBurst; i++) {
+    const t0 = performance.now();
+    await setSide(side, true);
+    const onRemaining = Math.max(5, CONFIG.flashOnMs - (performance.now() - t0));
+    await sleep(onRemaining, signal);
+
+    const t1 = performance.now();
+    await setSide(side, false);
+    // Only wait flashOffMs between flashes inside the burst; after the last flash, burstBreakMs runs
+    if (i < CONFIG.flashesPerBurst - 1) {
+      const offRemaining = Math.max(5, CONFIG.flashOffMs - (performance.now() - t1));
+      await sleep(offRemaining, signal);
+    }
+  }
+}
+
+async function releaseLights() {
+  el("lampLeft").classList.remove("on");
+  el("lampRight").classList.remove("on");
+  try {
+    await sendRaw(CONFIG.leftRelease.replace(/\s+/g, ""));
+    await sendRaw(CONFIG.rightRelease.replace(/\s+/g, ""));
+    await sendRaw("1001"); // Return J519 to Default Diagnostic Session
+    log("Control returned to ECU (2F ... 00).");
+  } catch (e) {
+    log(`Release warning: ${e.message}`);
+  }
+}
+
+async function startWigwag() {
+  if (isRunning) return;
+  syncConfigFromUI();
+
+  if (CONFIG.leftOn.includes("XX") || CONFIG.rightOn.includes("YY")) {
+    log("WARNING: Replace XX XX and YY YY in CONFIG with your captured 2F DIDs first.");
+  }
+
+  isRunning = true;
+  abortController = new AbortController();
+  const { signal } = abortController;
+
+  el("btnStart").disabled = true;
+  el("btnStop").disabled = false;
+
+  try {
+    // Enter UDS Extended Diagnostic Session (0x03)
+    const sess = await sendRaw("1003");
+    log(`Session 10 03 -> ${sess}`);
+
+    // Background TesterPresent (3E 80 = suppress positive response)
+    keepAliveTimer = setInterval(() => {
+      if (isRunning) sendRaw("3E80").catch(() => {});
+    }, CONFIG.testerPresentMs);
+
+    let cycle = 0;
+    const targetCycles = CONFIG.loopCycles; // 0 = infinite
+    log(`Running: ${CONFIG.flashesPerBurst} flashes + ${CONFIG.burstBreakMs}ms break (${targetCycles || "∞"} cycles)`);
+
+    while (targetCycles === 0 || cycle < targetCycles) {
+      cycle++;
+      if (CONFIG.patternMode === "alternate") {
+        // 3 quick flashes Left -> short break -> 3 quick flashes Right -> short break
+        await runBurst("left", signal);
+        await sleep(CONFIG.burstBreakMs, signal);
+
+        await runBurst("right", signal);
+        await sleep(CONFIG.burstBreakMs, signal);
+      } else {
+        // 3 quick flashes Both -> short break -> 3 quick flashes Both -> short break
+        await runBurst("both", signal);
+        await sleep(CONFIG.burstBreakMs, signal);
+
+        await runBurst("both", signal);
+        await sleep(CONFIG.burstBreakMs, signal);
+      }
+    }
+    log(`Completed ${cycle} cycle(s).`);
+  } catch (err) {
+    if (err.name !== "AbortError") log(`Stopped on error: ${err.message}`);
+    else log("Stopped by user.");
+  } finally {
+    clearInterval(keepAliveTimer);
+    keepAliveTimer = null;
+    await releaseLights();
+    isRunning = false;
+    el("btnStart").disabled = false;
+    el("btnStop").disabled = true;
+  }
+}
+
+function stopWigwag() {
+  if (abortController) abortController.abort();
+}
+
+el("btnConnect").addEventListener("click", connectBLE);
+el("btnStart").addEventListener("click", startWigwag);
+el("btnStop").addEventListener("click", stopWigwag);
+</script>
+</body>
+</html>
