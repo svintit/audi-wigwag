@@ -50,10 +50,10 @@
     #btnProbe { background: #8b5cf6; color: #fff; }
     #btnStart { background: var(--green); color: #062117; }
     #btnStop { background: var(--accent); color: #fff; }
-    .did-list { display: flex; flex-direction: column; gap: 6px; max-height: 165px; overflow-y: auto; }
+    .did-list { display: flex; flex-direction: column; gap: 6px; max-height: 175px; overflow-y: auto; }
     .did-item {
       display: flex; justify-content: space-between; align-items: center; gap: 6px;
-      background: #101319; border: 1px solid var(--border); border-radius: 8px; padding: 6px 8px; font-size: 0.73rem;
+      background: #101319; border: 1px solid var(--border); border-radius: 8px; padding: 6px 8px; font-size: 0.72rem;
     }
     .did-btns { display: flex; gap: 4px; }
     .did-btns button { padding: 5px 8px; font-size: 0.7rem; border-radius: 6px; background: #262b36; color: #fff; }
@@ -117,8 +117,8 @@
   <div id="log">Ready. Close Car Scanner, turn ignition ON, and tap Connect.</div>
 
 <script>
-const APP_VERSION = "v1.5";
-const STORAGE_KEY = "vag_wigwag_profile_v3";
+const APP_VERSION = "v1.7";
+const STORAGE_KEY = "vag_wigwag_profile_v4";
 
 const DEFAULT_PROFILE = {
   carLabel: "Not scanned yet",
@@ -138,6 +138,11 @@ const BLE_SERVICES = [
   "0000ffe0-0000-1000-8000-00805f9b34fb",
   "000018f0-0000-1000-8000-00805f9b34fb",
   "6e400001-b5a3-f393-e0a9-e50e24dcca9e"
+];
+
+const ELM_NAME_PREFIXES = [
+  "IOS", "Vlink", "V-LINK", "Vgate", "OBD", "ELM",
+  "Veepeak", "LELink", "Carista", "KONNWEI", "Bimmer", "UNI", "Viecar"
 ];
 
 let bleDevice = null, writeChar = null, notifyChar = null;
@@ -181,7 +186,7 @@ function refreshProfileUI() {
   el("burstBreakMs").value = profile.burstBreakMs;
   el("patternMode").value = profile.patternMode;
 
-  const readyTag = profile.leftOn ? ` | Cmd: ${profile.leftOn}` : " | Needs Find Lights";
+  const readyTag = profile.leftOn ? ` | ${profile.leftOn}` : " | Needs Find Lights";
   el("profileSummary").textContent = `${profile.carLabel}${readyTag}`;
 
   const sel = el("targetModule");
@@ -244,8 +249,19 @@ async function targetBus(mod) {
 async function connectBLE() {
   try {
     if (!navigator.bluetooth) { log("Error: Open this URL in Bluefy (not Safari)."); return; }
-    log("Opening BLE device picker...");
-    bleDevice = await navigator.bluetooth.requestDevice({ acceptAllDevices: true, optionalServices: BLE_SERVICES });
+    log("Opening filtered OBD-II picker...");
+    const filters = ELM_NAME_PREFIXES.map(namePrefix => ({ namePrefix }));
+    try {
+      bleDevice = await navigator.bluetooth.requestDevice({ filters, optionalServices: BLE_SERVICES });
+    } catch (filterErr) {
+      if (filterErr.name === "NotFoundError") {
+        log("No named ELM found; showing all BLE devices...");
+        bleDevice = await navigator.bluetooth.requestDevice({ acceptAllDevices: true, optionalServices: BLE_SERVICES });
+      } else {
+        throw filterErr;
+      }
+    }
+
     bleDevice.addEventListener("gattserverdisconnected", () => {
       el("statusBadge").textContent = "Disconnected";
       el("statusBadge").classList.remove("connected");
@@ -305,7 +321,7 @@ async function scanCar() {
   try {
     log("Scanning VAG lighting & LED modules...");
     await sendRaw("ATAT0");
-    await sendRaw("ATST 19"); // ~100ms wait so sleeping LED modules wake cleanly
+    await sendRaw("ATST 19");
 
     const candidates = [
       { proto: "ATSP6", cp: "", tx: "725", rx: "78F", side: "L", role: "29 Left LED" },
@@ -322,7 +338,7 @@ async function scanCar() {
     for (const c of candidates) {
       await targetBus(c);
       let ping = await sendRaw("3E00");
-      if (!ping || ping.includes("NO DATA")) ping = await sendRaw("3E00"); // 2nd wake ping
+      if (!ping || ping.includes("NO DATA")) ping = await sendRaw("3E00");
       if (ping && !ping.includes("NO DATA") && !ping.includes("ERROR") && !ping.includes("?")) {
         const pn = parsePartNumber(await sendRaw("22F187"));
         const label = `${c.role} · ${c.tx} (${pn || "OK"})`;
@@ -341,7 +357,6 @@ async function scanCar() {
       const bcmMod = found.find(m => m.side === "B");
 
       if (leftMod || rightMod) {
-        // Pair 725 (Left) & 726 (Right) automatically even if only one replied during scan
         const lObj = leftMod || { proto: "ATSP6", cp: "", tx: "725", rx: "78F", label: "29 Left LED · 725" };
         const rObj = rightMod || { proto: "ATSP6", cp: "", tx: "726", rx: "790", label: "39 Right LED · 726" };
         if (!leftMod) { found.unshift(lObj); profile.modules = found; }
@@ -384,26 +399,47 @@ async function probeLights() {
     await sendRaw("ATH0");
     await targetBus(mod);
     const sess = await sendRaw("1003");
-    log(`Probing 2F & 31 on ${mod.tx} (Session ${sess})... Watch lights!`);
+    log(`Probing routines & 2F on ${mod.tx} (${sess})... Watch lights!`);
 
     await sendRaw("ATAT0");
     await sendRaw("ATST 06");
-
-    // Full LED modules (4H0907472 / 7PP941572) use 01xx-04xx & F0xx for both 2F I/O and 31 Routines
-    const ranges = [
-      [0x0100, 0x0160],
-      [0x0200, 0x0260],
-      [0x0300, 0x0350],
-      [0xF000, 0xF040]
-    ];
     let hits = 0;
 
+    // 1) Test parameterized VAG LED routines 0300 & 0317 (channels 01..0A with 64=100% PWM & 01=ON)
+    for (const rid of ["0300", "0317"]) {
+      for (let ch = 1; ch <= 10; ch++) {
+        if (signal.aborted) throw new DOMException("Aborted", "AbortError");
+        const chHex = ch.toString(16).toUpperCase().padStart(2, "0");
+        // Try 6-byte routine: 31 01 [RID] [CH] 64 (100% duty)
+        let r = await sendRaw(`3101${rid}${chHex}64`);
+        let param = `${chHex}64`;
+        if (r.startsWith("7F3113")) {
+          // Try 5-byte routine: 31 01 [RID] [CH]
+          r = await sendRaw(`3101${rid}${chHex}`);
+          param = chHex;
+        }
+        if (r && !r.includes("NO DATA") && !r.startsWith("7F3131") && !r.startsWith("7F3113")) {
+          await sendRaw(`3102${rid}${param}`).catch(() => {});
+          await sendRaw(`3102${rid}`).catch(() => {});
+          hits++;
+          const st = r.startsWith("71") ? "LED_ACTIVE" : r;
+          const tag = `${rid}_${param}`;
+          log(`HIT ${tag} [31_PARAM] -> ${st}`);
+          addCustomRow(tag, st, mod, {
+            on: `3101${rid}${param}`,
+            off: param.length === 4 ? `3101${rid}${chHex}00` : `3102${rid}${param}`,
+            rel: `3102${rid}`
+          });
+        }
+      }
+    }
+
+    // 2) Sweep remaining 2F InputOutputControl ranges (0400-14FF & FD00-FEFF)
+    const ranges = [[0x0400, 0x0650], [0x1000, 0x1200], [0xFD00, 0xFE40]];
     for (const [start, end] of ranges) {
       for (let did = start; did <= end; did++) {
         if (signal.aborted) throw new DOMException("Aborted", "AbortError");
         const hex = did.toString(16).toUpperCase().padStart(4, "0");
-
-        // 1) Test UDS 2F InputOutputControlByIdentifier
         let res = await sendRaw(`2F${hex}0301`);
         if (res && !res.includes("NO DATA") && !res.startsWith("7F2F31") && !res.startsWith("7F2F11")) {
           let mode = "2F_5";
@@ -416,17 +452,12 @@ async function probeLights() {
           hits++;
           const st = res.startsWith("6F") ? "ACTIVE" : res;
           log(`HIT ${hex} [${mode}] -> ${st}`);
-          addDidRow(hex, mode, st, mod);
-        }
-
-        // 2) Test UDS 31 RoutineControl (startRoutine 31 01 XX XX)
-        const r31 = await sendRaw(`3101${hex}`);
-        if (r31 && !r31.includes("NO DATA") && !r31.startsWith("7F3131") && !r31.startsWith("7F3111")) {
-          await sendRaw(`3102${hex}`).catch(() => {});
-          hits++;
-          const st = r31.startsWith("71") ? "ROUTINE_OK" : r31;
-          log(`HIT ${hex} [31_RTN] -> ${st}`);
-          addDidRow(hex, "31_RTN", st, mod);
+          const cmds = mode === "2F_6"
+            ? { on: `2F${hex}036400`, off: `2F${hex}030000`, rel: `2F${hex}00` }
+            : mode === "2F_7"
+            ? { on: `2F${hex}03640000`, off: `2F${hex}03000000`, rel: `2F${hex}00` }
+            : { on: `2F${hex}0301`, off: `2F${hex}0300`, rel: `2F${hex}00` };
+          addCustomRow(`${hex} (${mode})`, st, mod, cmds);
         }
       }
     }
@@ -445,33 +476,26 @@ async function probeLights() {
   }
 }
 
-function buildCmds(didHex, mode) {
-  if (mode === "31_RTN") return { on: `3101${didHex}`, off: `3102${didHex}`, rel: `3102${didHex}` };
-  if (mode === "2F_6")   return { on: `2F${didHex}036400`, off: `2F${didHex}030000`, rel: `2F${didHex}00` };
-  if (mode === "2F_7")   return { on: `2F${didHex}03640000`, off: `2F${didHex}03000000`, rel: `2F${didHex}00` };
-  return { on: `2F${didHex}0301`, off: `2F${didHex}0300`, rel: `2F${didHex}00` };
-}
-
-function addDidRow(didHex, mode, status, mod) {
+function addCustomRow(label, status, mod, cmds) {
   const row = document.createElement("div");
   row.className = "did-item";
-  row.innerHTML = `<span><b>${didHex}</b> (${mode} · ${status})</span>`;
+  row.innerHTML = `<span><b>${label}</b> · ${status}</span>`;
   const btns = document.createElement("div");
   btns.className = "did-btns";
 
   const bPulse = document.createElement("button");
   bPulse.textContent = "Pulse";
   bPulse.onclick = async () => {
-    const c = buildCmds(didHex, mode);
     await sendRaw("ATH0");
     await targetBus(mod);
     await sendRaw("1003");
-    await sendRaw(c.on);
-    await sleep(450);
-    await sendRaw(c.rel);
+    await sendRaw(cmds.on);
+    await sleep(500);
+    await sendRaw(cmds.off);
+    await sendRaw(cmds.rel);
     await sendRaw("1001");
     await sendRaw("ATH1");
-    log(`Pulsed ${didHex} on ${mod.tx}`);
+    log(`Pulsed ${cmds.on} on ${mod.tx}`);
   };
 
   const bSave = document.createElement("button");
@@ -479,11 +503,10 @@ function addDidRow(didHex, mode, status, mod) {
   bSave.style.background = "#10b981";
   bSave.style.color = "#062117";
   bSave.onclick = () => {
-    const c = buildCmds(didHex, mode);
-    profile.leftOn = c.on; profile.leftOff = c.off; profile.leftRel = c.rel;
-    profile.rightOn = c.on; profile.rightOff = c.off; profile.rightRel = c.rel;
+    profile.leftOn = cmds.on; profile.leftOff = cmds.off; profile.leftRel = cmds.rel;
+    profile.rightOn = cmds.on; profile.rightOff = cmds.off; profile.rightRel = cmds.rel;
     saveProfile();
-    log(`Saved ${didHex} (${mode}) to BOTH ${profile.leftMod.tx} & ${profile.rightMod.tx}!`);
+    log(`Saved ${cmds.on} to BOTH ${profile.leftMod.tx} & ${profile.rightMod.tx}!`);
   };
 
   btns.append(bPulse, bSave);
