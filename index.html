@@ -117,7 +117,7 @@
   <div id="log">Ready. Close Car Scanner, turn ignition ON, and tap Connect.</div>
 
 <script>
-const APP_VERSION = "v1.7";
+const APP_VERSION = "v1.8";
 const STORAGE_KEY = "vag_wigwag_profile_v4";
 
 const DEFAULT_PROFILE = {
@@ -224,7 +224,7 @@ function onBleNotify(event) {
   }
 }
 
-async function sendRaw(cmd, timeoutMs = 1200) {
+async function sendRaw(cmd, timeoutMs = 1800) {
   if (!writeChar) throw new Error("Not connected");
   rxBuffer = "";
   const payload = new TextEncoder().encode(cmd + "\r");
@@ -285,7 +285,7 @@ async function connectBLE() {
     el("statusBadge").textContent = bleDevice.name || "Connected";
     el("statusBadge").classList.add("connected");
 
-    await sendRaw("ATZ", 2000);
+    await sendRaw("ATZ", 2200);
     await sendRaw("ATE0");
     await sendRaw("ATL0");
     await sendRaw("ATS0");
@@ -402,7 +402,7 @@ async function probeLights() {
     log(`Probing routines & 2F on ${mod.tx} (${sess})... Watch lights!`);
 
     await sendRaw("ATAT0");
-    await sendRaw("ATST 06");
+    await sendRaw("ATST 0C"); // Safe ~48ms timeout for IOS-Vlink
     let hits = 0;
 
     // 1) Test parameterized VAG LED routines 0300 & 0317 (channels 01..0A with 64=100% PWM & 01=ON)
@@ -410,12 +410,12 @@ async function probeLights() {
       for (let ch = 1; ch <= 10; ch++) {
         if (signal.aborted) throw new DOMException("Aborted", "AbortError");
         const chHex = ch.toString(16).toUpperCase().padStart(2, "0");
-        // Try 6-byte routine: 31 01 [RID] [CH] 64 (100% duty)
         let r = await sendRaw(`3101${rid}${chHex}64`);
+        await sleep(15, signal);
         let param = `${chHex}64`;
         if (r.startsWith("7F3113")) {
-          // Try 5-byte routine: 31 01 [RID] [CH]
           r = await sendRaw(`3101${rid}${chHex}`);
+          await sleep(15, signal);
           param = chHex;
         }
         if (r && !r.includes("NO DATA") && !r.startsWith("7F3131") && !r.startsWith("7F3113")) {
@@ -434,13 +434,14 @@ async function probeLights() {
       }
     }
 
-    // 2) Sweep remaining 2F InputOutputControl ranges (0400-14FF & FD00-FEFF)
+    // 2) Sweep remaining 2F InputOutputControl ranges (0400-0650, 1000-1200, FD00-FE40)
     const ranges = [[0x0400, 0x0650], [0x1000, 0x1200], [0xFD00, 0xFE40]];
     for (const [start, end] of ranges) {
       for (let did = start; did <= end; did++) {
         if (signal.aborted) throw new DOMException("Aborted", "AbortError");
         const hex = did.toString(16).toUpperCase().padStart(4, "0");
         let res = await sendRaw(`2F${hex}0301`);
+        await sleep(15, signal);
         if (res && !res.includes("NO DATA") && !res.startsWith("7F2F31") && !res.startsWith("7F2F11")) {
           let mode = "2F_5";
           if (res.startsWith("7F2F13")) {
