@@ -114,11 +114,13 @@
     <div id="didList" class="did-list" style="display:none;"></div>
   </div>
 
+  <button id="btnCopyLog" type="button" style="padding:9px;border-radius:9px;background:#262b36;color:#fff;font-size:0.8rem;">Copy Log</button>
+
   <div id="log">Ready. Close Car Scanner, turn ignition ON, and tap Connect.</div>
 
 <script>
-const APP_VERSION = "v1.8";
-const STORAGE_KEY = "vag_wigwag_profile_v4";
+const APP_VERSION = "v1.9";
+const STORAGE_KEY = "vag_wigwag_profile_v5";
 
 const DEFAULT_PROFILE = {
   carLabel: "Not scanned yet",
@@ -297,20 +299,90 @@ async function connectBLE() {
   } catch (err) { log(`Connect error: ${err.message}`); }
 }
 
-function parsePartNumber(rawReply) {
-  const lines = rawReply.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
-  let hexPayload = "";
-  for (let i = 0; i < lines.length; i++) {
-    const idx = lines[i].indexOf("62F187");
-    if (idx !== -1) hexPayload += lines[i].slice(idx + 6);
-    else if (i > 0 && lines[i].length > 8) hexPayload += lines[i].slice(lines[i].startsWith("1") ? 10 : 5);
-  }
+function decodeAsciiHex(hex) {
   let ascii = "";
-  for (let i = 0; i + 1 < hexPayload.length; i += 2) {
-    const code = parseInt(hexPayload.slice(i, i + 2), 16);
+  for (let i = 0; i + 1 < hex.length; i += 2) {
+    const code = parseInt(hex.slice(i, i + 2), 16);
     if (code >= 0x20 && code <= 0x7e) ascii += String.fromCharCode(code);
+    else break;
   }
   return ascii.trim();
+}
+
+function extractDidPayload(rawReply, didHex) {
+  const clean = rawReply.replace(/[\s>]/g, "").toUpperCase();
+  const idx = clean.indexOf(didHex.toUpperCase());
+  if (idx === -1) return "";
+  return clean.slice(idx + didHex.length).replace(/7F[0-9A-F]{2}.*$/, "");
+}
+
+function parsePartNumber(rawReply) {
+  return decodeAsciiHex(extractDidPayload(rawReply, "62F187"));
+}
+
+function parseVIN(rawReply) {
+  return decodeAsciiHex(extractDidPayload(rawReply, "5A90"));
+}
+
+// --- Module-scan helpers ---
+const hex3 = (n) => n.toString(16).toUpperCase().padStart(3, "0");
+const NO_RESP = /NO DATA|UNABLE|BUS INIT|BUS BUSY|STOPPED|CAN ?ERR|\?/;
+const KNOWN_TX = {
+  "700": "19 Gateway", "70E": "09 BCM (MQB)", "710": "09 BCM1 (MLB)",
+  "725": "29 Left Light", "726": "39 Right Light", "765": "09 Central Elec",
+  "766": "D6 LED Left", "767": "D7 LED Right",
+  "7E0": "01 Engine", "7E1": "02 Trans", "7E2": "03 ABS"
+};
+
+function isNoResponse(res) {
+  return !res || res.trim() === "" || NO_RESP.test(res);
+}
+
+async function sendAndCollect(cmd, waitMs = 450) {
+  if (!writeChar) throw new Error("Not connected");
+  rxBuffer = "";
+  const payload = new TextEncoder().encode(cmd + "\r");
+  if (writeChar.properties.writeWithoutResponse) await writeChar.writeValueWithoutResponse(payload);
+  else await writeChar.writeValue(payload);
+  await sleep(waitMs);
+  const out = rxBuffer;
+  rxBuffer = "";
+  return out;
+}
+
+function extractIds(raw, len) {
+  const re = new RegExp(`\\b([0-9A-Fa-f]{${len}})\\b`, "g");
+  const ids = new Set();
+  let m;
+  while ((m = re.exec(raw))) ids.add(m[1].toUpperCase());
+  return [...ids];
+}
+
+async function tryTx(tx, rx, proto) {
+  await sendRaw(proto);
+  await sendRaw(`ATSH ${tx}`);
+  await sendRaw(`ATCRA ${rx}`);
+  await sendRaw("ATH0");
+  const ping = await sendRaw("3E00", 800);
+  if (isNoResponse(ping)) return null;
+  await sendRaw("ATST 19"); // longer window for multi-frame part-number reads
+  let pn = parsePartNumber(await sendRaw("22F187", 2600));
+  if (!pn) pn = parseVIN(await sendRaw("1A90", 2600));
+  await sendRaw("ATST 08");
+  return { pn, raw: ping };
+}
+
+async function functionalBroadcast(proto, functionalId, waitMs) {
+  const zero = proto === "ATSP7" ? "00000000" : "000";
+  await sendRaw(proto);
+  await sendRaw("ATH1");
+  await sendRaw(`ATCM ${zero}`);
+  await sendRaw(`ATCRA ${zero}`);
+  await sendRaw(`ATSH ${functionalId}`);
+  const out = await sendAndCollect("3E00", waitMs);
+  await sleep(300);
+  rxBuffer = "";
+  return out;
 }
 
 async function scanCar() {
@@ -318,65 +390,104 @@ async function scanCar() {
   isRunning = true;
   ["btnScan", "btnProbe", "btnStart"].forEach(id => el(id).disabled = true);
 
+  const found = [];
+  const seen = new Set();
+  const addFound = (m) => {
+    const key = `${m.proto}|${m.tx}|${m.rx}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    found.push(m);
+  };
+
   try {
-    log("Scanning VAG lighting & LED modules...");
+    log("=== SCAN ALL MODULES ===");
     await sendRaw("ATAT0");
-    await sendRaw("ATST 19");
+    await sendRaw("ATST 08");
 
-    const candidates = [
-      { proto: "ATSP6", cp: "", tx: "725", rx: "78F", side: "L", role: "29 Left LED" },
-      { proto: "ATSP6", cp: "", tx: "726", rx: "790", side: "R", role: "39 Right LED" },
-      { proto: "ATSP6", cp: "", tx: "766", rx: "7D0", side: "L", role: "D6 Left LED Drv" },
-      { proto: "ATSP6", cp: "", tx: "767", rx: "7D1", side: "R", role: "D7 Right LED Drv" },
-      { proto: "ATSP6", cp: "", tx: "710", rx: "77A", side: "B", role: "09 BCM1 (MLB)" },
-      { proto: "ATSP6", cp: "", tx: "70E", rx: "778", side: "B", role: "09 BCM (MQB)" },
-      { proto: "ATSP6", cp: "", tx: "765", rx: "7CF", side: "B", role: "09 Central Elec" },
-      { proto: "ATSP7", cp: "17", tx: "FC0076", rx: "17FE0076", side: "B", role: "09 BCM1 29-bit" }
-    ];
-
-    const found = [];
-    for (const c of candidates) {
-      await targetBus(c);
-      let ping = await sendRaw("3E00");
-      if (!ping || ping.includes("NO DATA")) ping = await sendRaw("3E00");
-      if (ping && !ping.includes("NO DATA") && !ping.includes("ERROR") && !ping.includes("?")) {
-        const pn = parsePartNumber(await sendRaw("22F187"));
-        const label = `${c.role} · ${c.tx} (${pn || "OK"})`;
-        found.push({ ...c, pn, label });
-        log(`FOUND: ${label}`);
+    // Phase A: 11-bit physical sweep (VAG +0x6A / OBD +0x08 offsets)
+    log("A) 11-bit physical sweep (VAG +0x6A / OBD +0x08)...");
+    await sendRaw("ATSP6");
+    const pairs = [];
+    for (let tx = 0x700; tx <= 0x795; tx++) pairs.push([tx, tx + 0x6A, "ATSP6"]);
+    for (let tx = 0x7E0; tx <= 0x7E7; tx++) pairs.push([tx, tx + 0x08, "ATSP6"]);
+    for (const [tx, rx, proto] of pairs) {
+      const txHex = hex3(tx), rxHex = hex3(rx);
+      const hit = await tryTx(txHex, rxHex, proto);
+      if (hit) {
+        const lbl = KNOWN_TX[txHex] ? `${KNOWN_TX[txHex]} · ${txHex}` : `Module · ${txHex}`;
+        addFound({ proto, cp: "", tx: txHex, rx: rxHex, pn: hit.pn, label: lbl });
+        log(`FOUND ${txHex} -> ${rxHex}${hit.pn ? "  PN: " + hit.pn : ""}`);
       }
     }
 
+    // Phase B: 11-bit functional broadcast (catches non-standard offsets)
+    log("B) 11-bit functional broadcast...");
+    try {
+      const raw = await functionalBroadcast("ATSP6", "7DF", 700);
+      const ids = extractIds(raw, 3);
+      log(`   ${ids.length} responder(s): ${ids.join(", ") || "none"}`);
+      await sendRaw("ATCM 7FF");
+      for (const rx of ids) {
+        const rxN = parseInt(rx, 16);
+        for (const off of [0x6A, 0x08, 0x04, 0x0C, 0x10, 0x80]) {
+          if (rxN <= off) continue;
+          const txHex = hex3(rxN - off);
+          if (seen.has(`ATSP6|${txHex}|${rx}`)) continue;
+          const hit = await tryTx(txHex, rx, "ATSP6");
+          if (hit) {
+            const lbl = KNOWN_TX[txHex] ? `${KNOWN_TX[txHex]} · ${txHex}` : `Module · ${txHex}`;
+            addFound({ proto: "ATSP6", cp: "", tx: txHex, rx, pn: hit.pn, label: lbl });
+            log(`FOUND ${txHex} -> ${rx}${hit.pn ? "  PN: " + hit.pn : ""}`);
+          }
+        }
+      }
+    } catch (e) { log(`   functional error: ${e.message}`); }
+
+    // Phase C: 29-bit (newer MLB-Evo platforms)
+    log("C) 29-bit sweep...");
+    try {
+      await sendRaw("ATSP7");
+      await sendRaw("ATST 08");
+      const raw = await functionalBroadcast("ATSP7", "18DB33F1", 700);
+      const ids = extractIds(raw, 8);
+      log(`   29-bit responders: ${ids.join(", ") || "none"}`);
+      await sendRaw("ATCM 1FFFFFFF");
+      const addrs = ["01", "02", "03", "09", "19", "29", "39", "4B", "55", "D6", "D7"];
+      for (const a of addrs) {
+        const tx = `18DA${a}F1`, rx = `18DAF1${a}`;
+        const hit = await tryTx(tx, rx, "ATSP7");
+        if (hit) {
+          addFound({ proto: "ATSP7", cp: "", tx, rx, pn: hit.pn, label: `29-bit ${a} · ${tx}` });
+          log(`FOUND 29-bit ${tx} -> ${rx}${hit.pn ? "  PN: " + hit.pn : ""}`);
+        }
+      }
+    } catch (e) { log(`   29-bit error: ${e.message}`); }
+
+    // Finalize
+    await sendRaw("ATSP6");
+    await sendRaw("ATCM 7FF");
     await sendRaw("ATAT1");
     await sendRaw("ATST 19");
+    await sendRaw("ATH1");
 
-    if (found.length > 0) {
+    if (found.length) {
       profile.modules = found;
-      const leftMod = found.find(m => m.side === "L");
-      const rightMod = found.find(m => m.side === "R");
-      const bcmMod = found.find(m => m.side === "B");
-
-      if (leftMod || rightMod) {
-        const lObj = leftMod || { proto: "ATSP6", cp: "", tx: "725", rx: "78F", label: "29 Left LED · 725" };
-        const rObj = rightMod || { proto: "ATSP6", cp: "", tx: "726", rx: "790", label: "39 Right LED · 726" };
-        if (!leftMod) { found.unshift(lObj); profile.modules = found; }
-        profile.leftMod = lObj;
-        profile.rightMod = rObj;
-        profile.activeIdx = found.findIndex(m => m.tx === (rightMod ? rightMod.tx : lObj.tx));
-        profile.carLabel = `Full LED (${lObj.tx}/${rObj.tx})`;
-      } else {
-        profile.leftMod = bcmMod;
-        profile.rightMod = bcmMod;
-        profile.activeIdx = 0;
-        profile.carLabel = `${bcmMod.pn || bcmMod.tx}`;
-      }
+      const left = found.find(m => m.tx === "766" || m.tx === "725") || found[0];
+      const right = found.find(m => m.tx === "767" || m.tx === "726") || left;
+      profile.leftMod = left;
+      profile.rightMod = right;
+      profile.activeIdx = 0;
+      profile.carLabel = `${found.length} module(s) found`;
       saveProfile();
-      log(`Target set to ${getSelectedModule().label}. Tap '3. Find Lights'!`);
+      log(`=== DONE: ${found.length} module(s) found ===`);
+      log("Copy the whole log and paste it back for analysis.");
     } else {
-      log("No module replied. Ensure ignition is ON (gauges lit).");
+      log("=== NO MODULES FOUND ===");
+      log("Check ignition ON + adapter linked, then tap '2. Scan Car' again.");
     }
-  } catch (err) { log(`Scan error: ${err.message}`); }
-  finally {
+  } catch (err) {
+    log(`Scan error: ${err.message}`);
+  } finally {
     isRunning = false;
     ["btnScan", "btnProbe", "btnStart"].forEach(id => el(id).disabled = false);
   }
@@ -608,6 +719,24 @@ async function startWigwag() {
     el("btnStop").disabled = true;
   }
 }
+
+function copyText(text) {
+  const ta = document.createElement("textarea");
+  ta.value = text;
+  ta.style.position = "fixed";
+  ta.style.opacity = "0";
+  document.body.appendChild(ta);
+  ta.select();
+  let ok = false;
+  try { ok = document.execCommand("copy"); } catch {}
+  document.body.removeChild(ta);
+  return ok;
+}
+
+el("btnCopyLog").addEventListener("click", () => {
+  const ok = copyText(logBox.textContent);
+  log(ok ? "Log copied to clipboard." : "Copy failed — select the log text manually.");
+});
 
 refreshProfileUI();
 el("targetModule").addEventListener("change", (e) => {
